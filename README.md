@@ -144,7 +144,11 @@ async function getTopHNStoriesBR(env: Env, num: number) {
       throw error;
   }
 }
-
+/**
+ * Tool for scraping Hacker News stories
+ * Uses the Async Local Storage (ALS) context to access environment configuration to use CloudflareBrowser Rendering binding
+ * The agentContext stores per-request data like environment variables and user session info
+ */
 const scrapeHackerNews = tool({
   description: "scrape top stories from Hacker News (HN)",
   parameters: z.object({
