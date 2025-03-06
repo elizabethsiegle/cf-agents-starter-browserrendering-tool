@@ -101,6 +101,68 @@ const scheduleTask = tool({
     // ... see the implementation in tools.ts
   },
 });
+// Browser Rendering tool implementation to scrape Hacker News with helper function 
+async function getTopHNStoriesBR(env: Env, num: number) {
+  const browserManager = new BrowserDo(env, null);
+  const browser = await browserManager.initBrowser();
+  
+  try {
+      const page = await browser.newPage();
+      await page.goto('https://news.ycombinator.com');
+      
+      const stories = await page.evaluate(() => {
+          const stories: { title: string; link: string }[] = [];
+          const storyElements = document.querySelectorAll('.athing');
+
+          storyElements.forEach((story, index) => {
+              const titleElement = story.querySelector('.titleline a') as HTMLAnchorElement | null;
+              const title = titleElement?.innerText.trim();
+              const link = titleElement?.href;
+
+              if (title && link) {
+                  stories.push({ title, link });
+              }
+          });
+
+          return stories;
+      });
+      
+      await browser.close();
+      const selectedStories = stories.slice(0, num);
+      
+      // Create HTML output with proper clickable links
+      let htmlOutput = `<div>Here are the top ${num} Hacker News posts:</div>`;
+      
+      for (let i = 0; i < selectedStories.length; i++) {
+          const story = selectedStories[i];
+          htmlOutput += `<div>${i + 1}. <a href="${story.link}" target="_blank">${story.title}</a></div>`;
+      }
+
+      return htmlOutput;
+  } catch (error) {
+      await browser.close();
+      throw error;
+  }
+}
+
+const scrapeHackerNews = tool({
+  description: "scrape top stories from Hacker News (HN)",
+  parameters: z.object({
+    num: z.number().describe("number of stories to retrieve").default(5),
+  }),
+  execute: async ({ num }) => {
+    const context = agentContext.getStore();
+    console.log("Context", context);
+    if (!context?.env) {
+      throw new Error("Browser environment not available");
+    }
+    console.log("Scraping HN stories...");
+    const stories = await getTopHNStoriesBR(context.env, num);
+    
+    // Return the HTML directly without letting the AI reformat it
+    return { __html: stories };  // Use __html to indicate this is raw HTML
+  }
+});
 ```
 
 To handle tool confirmations, add execution functions to the `executions` object:

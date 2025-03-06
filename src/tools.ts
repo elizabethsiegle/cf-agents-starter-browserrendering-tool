@@ -64,7 +64,15 @@ const scheduleTask = tool({
   },
 });
 
+/**
+ * Scrapes top stories from Hacker News using browser automation
+ * @param env - Environment configuration for browser management
+ * @param num - Number of stories to retrieve
+ * @returns HTML string containing formatted story links
+ */
+
 async function getTopHNStoriesBR(env: Env, num: number) {
+  // BrowserDo manages browser instances for automation
   const browserManager = new BrowserDo(env, null);
   const browser = await browserManager.initBrowser();
   
@@ -72,8 +80,10 @@ async function getTopHNStoriesBR(env: Env, num: number) {
       const page = await browser.newPage();
       await page.goto('https://news.ycombinator.com');
       
+      // Execute JavaScript within the browser context to extract story data
       const stories = await page.evaluate(() => {
           const stories: { title: string; link: string }[] = [];
+          // '.athing' is HN's CSS class for story containers
           const storyElements = document.querySelectorAll('.athing');
 
           storyElements.forEach((story, index) => {
@@ -92,7 +102,7 @@ async function getTopHNStoriesBR(env: Env, num: number) {
       await browser.close();
       const selectedStories = stories.slice(0, num);
       
-      // Create HTML output with proper clickable links
+      // Format results as HTML for display in chat
       let htmlOutput = `<div>Here are the top ${num} Hacker News posts:</div>`;
       
       for (let i = 0; i < selectedStories.length; i++) {
@@ -107,12 +117,18 @@ async function getTopHNStoriesBR(env: Env, num: number) {
   }
 }
 
+/**
+ * Tool for scraping Hacker News stories
+ * Uses the Async Local Storage (ALS) context to access environment configuration to use CloudflareBrowser Rendering binding
+ * The agentContext stores per-request data like environment variables and user session info
+ */
 const scrapeHackerNews = tool({
   description: "scrape top stories from Hacker News (HN)",
   parameters: z.object({
     num: z.number().describe("number of stories to retrieve").default(5),
   }),
   execute: async ({ num }) => {
+    // Retrieve the context from ALS (Async Local Storage)
     const context = agentContext.getStore();
     console.log("Context", context);
     if (!context?.env) {
