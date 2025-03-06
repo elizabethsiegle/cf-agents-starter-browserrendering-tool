@@ -2,10 +2,10 @@
  * Tool definitions for the AI chat agent
  * Tools can either require human confirmation or execute automatically
  */
-import { tool } from "ai";
+import { tool, type ToolExecutionOptions } from "ai";
 import { z } from "zod";
+import { agentContext, type Env, BrowserDo } from "./server";
 
-import { agentContext } from "./server";
 
 /**
  * Weather information tool that requires human confirmation
@@ -51,8 +51,8 @@ const scheduleTask = tool({
         type === "scheduled"
           ? new Date(when) // scheduled
           : type === "delayed"
-            ? when // delayed
-            : when, // cron
+          ? when // delayed
+          : when, // cron
         "executeTask",
         payload
       );
@@ -63,23 +63,92 @@ const scheduleTask = tool({
     return `Task scheduled for ${when}`;
   },
 });
+
+async function getTopHNStoriesBR(env: Env, num: number) {
+  const browserManager = new BrowserDo(env, null);
+  const browser = await browserManager.initBrowser();
+  
+  try {
+      const page = await browser.newPage();
+      await page.goto('https://news.ycombinator.com');
+      
+      const stories = await page.evaluate(() => {
+          const stories: { title: string; link: string }[] = [];
+          const storyElements = document.querySelectorAll('.athing');
+
+          storyElements.forEach((story, index) => {
+              const titleElement = story.querySelector('.titleline a') as HTMLAnchorElement | null;
+              const title = titleElement?.innerText.trim();
+              const link = titleElement?.href;
+
+              if (title && link) {
+                  stories.push({ title, link });
+              }
+          });
+
+          return stories;
+      });
+      
+      await browser.close();
+      const selectedStories = stories.slice(0, num);
+      
+      // Create HTML output with proper clickable links
+      let htmlOutput = `<div>Here are the top ${num} Hacker News posts:</div>`;
+      
+      for (let i = 0; i < selectedStories.length; i++) {
+          const story = selectedStories[i];
+          htmlOutput += `<div>${i + 1}. <a href="${story.link}" target="_blank">${story.title}</a></div>`;
+      }
+
+      return htmlOutput;
+  } catch (error) {
+      await browser.close();
+      throw error;
+  }
+}
+
+const scrapeHackerNews = tool({
+  description: "scrape top stories from Hacker News (HN)",
+  parameters: z.object({
+    num: z.number().describe("number of stories to retrieve").default(5),
+  }),
+  execute: async ({ num }) => {
+    const context = agentContext.getStore();
+    console.log("Context", context);
+    if (!context?.env) {
+      throw new Error("Browser environment not available");
+    }
+    console.log("Scraping HN stories...");
+    const stories = await getTopHNStoriesBR(context.env, num);
+    
+    // Return the HTML directly without letting the AI reformat it
+    return { __html: stories };  // Use __html to indicate this is raw HTML
+  }
+});
+
 /**
  * Export all available tools
  * These will be provided to the AI model to describe available capabilities
  */
+
 export const tools = {
   getWeatherInformation,
   getLocalTime,
   scheduleTask,
+  scrapeHackerNews,
 };
 
-/**
+/*
  * Implementation of confirmation-required tools
  * This object contains the actual logic for tools that need human approval
  * Each function here corresponds to a tool above that doesn't have an execute function
  */
 export const executions = {
-  getWeatherInformation: async ({ city }: { city: string }) => {
+  getWeatherInformation: async (
+    args: unknown,
+    context: ToolExecutionOptions
+  ) => {
+    const { city } = args as { city: string };
     console.log(`Getting weather information for ${city}`);
     return `The weather in ${city} is sunny`;
   },

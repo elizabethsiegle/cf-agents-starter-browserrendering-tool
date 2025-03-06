@@ -30,15 +30,14 @@ function isValidToolName<K extends PropertyKey, T extends object>(
 export async function processToolCalls<
   Tools extends ToolSet,
   ExecutableTools extends {
-    // biome-ignore lint/complexity/noBannedTypes: it's fine
     [Tool in keyof Tools as Tools[Tool] extends { execute: Function }
       ? never
       : Tool]: Tools[Tool];
-  },
+  }
 >({
   dataStream,
   messages,
-  executions,
+  executions, //env
 }: {
   tools: Tools; // used for type inference
   dataStream: DataStreamWriter;
@@ -47,15 +46,40 @@ export async function processToolCalls<
     [K in keyof Tools & keyof ExecutableTools]?: (
       args: z.infer<ExecutableTools[K]["parameters"]>,
       context: ToolExecutionOptions
-    ) => Promise<unknown>;
+    ) => Promise<any>;
   };
 }): Promise<Message[]> {
+  for (const message of messages) {
+    if (message.role === "assistant" && message.parts) {
+      // Lizzie: this is a hack and there's almost certainly a better way to do it
+      // right now if you throw an exception from a tool then the tool invocation gets
+      // stuck in a call state, and then when we streamText(..) it gets stuck on a message
+      // that it expects to parse a result out of but it didn't get one.
+      // ideally, don't throw exceptions from functions and return an error result you can handle
+      // but this will at least stop the whole app getting borked/requiring you to clear history
+      // by simply deleting the "bad tool invocation" part and replacing it with dummy text.
+      if (
+        message.parts.length > 0 &&
+        message.parts[0]?.type === "tool-invocation" &&
+        message.parts[0]?.toolInvocation?.state === "call" &&
+        !("result" in message.parts[0].toolInvocation)
+      ) {
+        message.parts = message.parts.slice(1);
+        message.parts.unshift({
+          type: "text",
+          text: "tool execution failed",
+        });
+      }
+    }
+  }
+
   const lastMessage = messages[messages.length - 1];
   const parts = lastMessage.parts;
   if (!parts) return messages;
 
   const processedParts = await Promise.all(
     parts.map(async (part) => {
+      console.log("processing part", part);
       // Only process tool invocations parts
       if (part.type !== "tool-invocation") return part;
 
@@ -66,7 +90,7 @@ export async function processToolCalls<
       if (!(toolName in executions) || toolInvocation.state !== "result")
         return part;
 
-      let result: unknown;
+      let result;
 
       if (toolInvocation.result === APPROVAL.YES) {
         // Get the tool and check if the tool has an execute function.
