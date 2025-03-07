@@ -6,6 +6,9 @@ import { tool, type ToolExecutionOptions } from "ai";
 import { z } from "zod";
 import { agentContext, type Env, BrowserDo } from "./server";
 
+interface AgentContext {
+  env: Env;
+}
 
 /**
  * Weather information tool that requires human confirmation
@@ -42,7 +45,7 @@ const scheduleTask = tool({
   }),
   execute: async ({ type, when, payload }) => {
     // we can now read the agent context from the ALS store
-    const agent = agentContext.getStore();
+    const agent = agentContext.getStore() as AgentContext;
     if (!agent) {
       throw new Error("No agent found");
     }
@@ -65,81 +68,59 @@ const scheduleTask = tool({
 });
 
 /**
- * Scrapes top stories from Hacker News using browser automation
- * @param env - Environment configuration for browser management
- * @param num - Number of stories to retrieve
- * @returns HTML string containing formatted story links
- */
-
-async function getTopHNStoriesBR(env: Env, num: number) {
-  // BrowserDo manages browser instances for automation
-  const browserManager = new BrowserDo(env, null);
-  const browser = await browserManager.initBrowser();
-  
-  try {
-      const page = await browser.newPage();
-      await page.goto('https://news.ycombinator.com');
-      
-      // Execute JavaScript within the browser context to extract story data
-      const stories = await page.evaluate(() => {
-          const stories: { title: string; link: string }[] = [];
-          // '.athing' is HN's CSS class for story containers
-          const storyElements = document.querySelectorAll('.athing');
-
-          storyElements.forEach((story, index) => {
-              const titleElement = story.querySelector('.titleline a') as HTMLAnchorElement | null;
-              const title = titleElement?.innerText.trim();
-              const link = titleElement?.href;
-
-              if (title && link) {
-                  stories.push({ title, link });
-              }
-          });
-
-          return stories;
-      });
-      
-      await browser.close();
-      const selectedStories = stories.slice(0, num);
-      
-      // Format results as HTML for display in chat
-      let htmlOutput = `<div>Here are the top ${num} Hacker News posts:</div>`;
-      
-      for (let i = 0; i < selectedStories.length; i++) {
-          const story = selectedStories[i];
-          htmlOutput += `<div>${i + 1}. <a href="${story.link}" target="_blank">${story.title}</a></div>`;
-      }
-
-      return htmlOutput;
-  } catch (error) {
-      await browser.close();
-      throw error;
-  }
-}
-
-/**
- * Tool for scraping Hacker News stories
+ * Tool for scraping Hacker News stories using Browser Rendering
  * Uses the Async Local Storage (ALS) context to access environment configuration to use CloudflareBrowser Rendering binding
  * The agentContext stores per-request data like environment variables and user session info
  */
-const scrapeHackerNews = tool({
-  description: "scrape top stories from Hacker News (HN)",
+
+const browserRender = tool({
+  description: "fetch the top stories from Hacker News using browser automation",
   parameters: z.object({
     num: z.number().describe("number of stories to retrieve").default(5),
   }),
   execute: async ({ num }) => {
-    // Retrieve the context from ALS (Async Local Storage)
-    const context = agentContext.getStore();
-    console.log("Context", context);
-    if (!context?.env) {
-      throw new Error("Browser environment not available");
+    const agent = agentContext.getStore() as AgentContext;
+    if (!agent) {
+      throw new Error("No agent found");
     }
-    console.log("Scraping HN stories...");
-    const stories = await getTopHNStoriesBR(context.env, num);
-    
-    // Return the HTML directly without letting the AI reformat it
-    return { __html: stories };  // Use __html to indicate this is raw HTML
-  }
+    try {
+      // Durable Object BrowserDo to keep browser instance alive and share it w/ multiple reqs
+      const browserManager = new BrowserDo(agent.env, null);
+      const browser = await browserManager.initBrowser();
+      
+      try {
+        const page = await browser.newPage();
+        await page.goto('https://news.ycombinator.com');
+        
+        const stories = await page.evaluate(() => {
+          const elements = document.querySelectorAll('.athing');
+          return Array.from(elements).map(element => {
+            const titleElement = element.querySelector('.titleline a') as HTMLAnchorElement;
+            return {
+              title: titleElement?.innerText?.trim() || '',
+              link: titleElement?.href || '',
+            };
+          });
+        });
+
+        await browser.close();
+        
+        const selectedStories = stories.slice(0, num);
+        let htmlOutput = `<div>Here are the top ${num} Hacker News posts:</div>`;
+        selectedStories.forEach((story: { title: string; link: string }, i: number) => {
+          htmlOutput += `<div>${i + 1}. <a href="${story.link}" target="_blank">${story.title}</a></div>`;
+        });
+
+        return { __html: htmlOutput };
+      } catch (error) {
+        await browser.close();
+        throw error;
+      }
+    } catch (error) {
+      console.error("error fetching HN stories", error);
+      return `Error fetching Hacker News stories: ${error}`;
+    }
+  },
 });
 
 /**
@@ -151,7 +132,7 @@ export const tools = {
   getWeatherInformation,
   getLocalTime,
   scheduleTask,
-  scrapeHackerNews,
+  browserRender,
 };
 
 /*
